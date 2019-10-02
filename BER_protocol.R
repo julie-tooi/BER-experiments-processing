@@ -1,87 +1,71 @@
-#Adding libs
+#!/usr/bin/env Rscript
+
+# libraries
+library("argparse")
 library("readxl")
-library("ggplot2")
-library("clusterSim")
-library("psych")
-library("tibble")
 library("dplyr")
-library("openxlsx")
+library("ggplot2")
 
-# Import
-path_RD <- readline(prompt = "Enter path to Excel file:")
-RawDF <- read_excel(path = path_RD)
-#example of path on Windows: "C:/Users/jozerova/Desktop/program_for_StepOne_data.xls"
- 
-# Delete lines and rename col
-RawDF <- RawDF[-c(1,2,3,4,5,6,7),]
-colnames(RawDF)[1] <- "Well"
-colnames(RawDF)[2] <- "Reading"
+# Input data from command line arguments
+parser <- ArgumentParser(description='Analysis of StepOne fluorescence measurement results')
+parser$add_argument("-f", "--fluorescence", required=T, help="Path to StepOne measurement results in xls format")
+parser$add_argument("-s", "--samplesetup", required=T,  help="Path to StepOne sample setup file in xls format")
+parser$add_argument("-d", "--dye", default="FAM", choices=c("FAM", "SYBR", "JOE", "VIC", "TAMRA", "NEX", "ROX"))
+parser$add_argument("-o", "--output", default="out", help="Output dir name")
+args <- parser$parse_args()
 
+raw_data_path <- args$fluorescence
+samples_data_path <- args$samplesetup
+dye <- args$dye
+output_path <- args$output
 
-#Input channel of detection and Delete columns with other channels - here only FAM
-channel <- readline(prompt = "Enter channel of detection (FAM or SYBR, JOE or VIC, TAMRA or NEX, ROX):")
-if (channel == "FAM" | channel == "SYBR"){
-  RawDF$...4 <- NULL
-  RawDF$...5 <- NULL
-  RawDF$...6 <- NULL
-  colnames(RawDF)[3] <- channel
+# Import sheets as data.frames
+raw_data <- as.data.frame(read_excel(raw_data_path, col_names = T, skip = 7))
+samples_data <- as.data.frame(read_excel(samples_data_path, col_names = T, skip = 7))
+
+# Select target channel of detection based on dye specified
+if (dye %in% c("FAM", "SYBR")){
+  channel <- "BLUE"
+} else if (dye %in% c("JOE", "VIC")) {
+  channel <- "GREEN"
+} else if (dye %in% c("TAMRA", "NEX")) {
+  channel <- "YELLOW"
+} else {
+  channel <- "RED"
 }
 
-#typeof(RawDF...
-RawDF$FAM <- as.numeric(RawDF$FAM)
-RawDF$Reading <- as.numeric(RawDF$Reading)
-RawDF$Well <- as.factor(RawDF$Well)
-RawDF <- subset(RawDF, Reading != 1)
+# Prepare input data
+# merge measurement results with sample data
+annotated_data <- merge(raw_data, samples_data)
+# remove empty wells
+annotated_data <- annotated_data %>% filter(!is.na(annotated_data$`Sample Name`))
+# select only columns of interest
+annotated_data <- subset(annotated_data, select=c("Well", "Cycle", channel, "Sample Name"))
+# rename columns
+names(annotated_data)[names(annotated_data) == "Sample Name"] <- "Name"
+names(annotated_data)[names(annotated_data) == channel] <- "Value"
+# correct data types
+annotated_data$Well <- as.factor(annotated_data$Well)
+annotated_data$Name <- as.factor(annotated_data$Name)
 
-#data processing
-DF_pr <- data.frame(2:60)
-colnames(DF_pr)[1] <- "Reading"
-#here we need a working function!
-raw_vec <- subset(RawDF, Well == "B7", select = "FAM")
-x <- raw_vec[c(1),]
-x <- as.numeric(x)
-vec_pr <- raw_vec - x
-DF_pr <- cbind(DF_pr, vec_pr)
-colnames(DF_pr)[7] <- "B7"
-  
-#this not work correctly T_T
-#adding_data <- function (Well, col){
-#  raw_vec <- subset(RawDF, Well == Well, select = "FAM")
-#  x <- raw_vec[c(1),]
-#  x <- as.numeric(x)
-#  vec_pr <- raw_vec - x
-#  DF_pr <- cbind(DF_pr, vec_pr)
-#  colnames(DF_pr)[col] <- Well
-#}
-#adding_data("B3", 3)
-
-#plot with data (StepOne like)
-ggplot(DF_pr, aes(x = Reading))+                    
-  geom_line(aes(y=B2), colour="red")+
-  geom_line(aes(y=B3), colour="red")+
-  geom_line(aes(y=B4), colour="red")+
-  geom_line(aes(y=B5), colour="blue")+
-  geom_line(aes(y=B6), colour="blue")+
-  geom_line(aes(y=B7), colour="blue")+  
-  scale_linetype_discrete(name="Raw Fluorescence")+
-  xlab("Reading") + ylab("Fluorescence")+
+# Plot fluorescence
+raw_channel_plot <- ggplot(data = annotated_data) +
+  geom_line(aes(x = Cycle, y = Value, color = Well)) +
   theme_bw()
 
-#boxplot for Fl(Tmax) - data extract
-Bp_data <- data.frame(1:3)
-colnames(Bp_data)[1] <- "Repeat"
+samples_channel_plot <- ggplot(data = annotated_data) +
+  geom_boxplot(aes(x = as.factor(Cycle), y = Value, color = Name)) +
+  theme_bw()
 
-max_data <- subset(DF_pr, Reading == 60)
-max_data_vec <- rbind(max_data$B2, max_data$B3, max_data$B4)
+# Create output files
+write.table(annotated_data, 
+            file = file.path(output_path, "fluorescence.txt"), 
+            row.names = F, quote = F, sep = "\t")
+ggsave(filename = file.path(output_path, "raw_data.png"),
+       plot = raw_channel_plot,
+       width = 250, height = 170, units = "mm")
+ggsave(filename = file.path(output_path, "samples_data.png"),
+       plot = samples_channel_plot,
+       width = 250, height = 170, units = "mm")
 
-Bp_data <- cbind(Bp_data, max_data_vec)
-colnames(Bp_data)[2] <- "U+UDG+"
-
-max_data_vec <- rbind(max_data$B5, max_data$B6, max_data$B7)
-Bp_data <- cbind(Bp_data, max_data_vec)
-colnames(Bp_data)[3] <- "U-UDG+"
-
-write.xlsx(Bp_data, "DataFI(Tmax)_DATE_OF_EXP.xlsx")
-
-#boxplot
-boxplot(Bp_data$`U+UDG+`, Bp_data$`U-UDG+`)
+print("Ok")
